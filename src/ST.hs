@@ -1,4 +1,5 @@
 {-# LANGUAGE ConstraintKinds     #-}
+{-# LANGUAGE CPP                 #-}
 {-# LANGUAGE DataKinds           #-}
 {-# LANGUAGE KindSignatures      #-}
 {-# LANGUAGE MagicHash           #-}
@@ -8,25 +9,44 @@
 {-# LANGUAGE TypeOperators       #-}
 {-# LANGUAGE UnboxedTuples       #-}
 
+{-# OPTIONS_GHC -Weverything #-}
+
 module ST
-  (
+  ( ST(..)
+  , runST
+
+  , STRef(..)
+  , newSTRef
+  , readSTRef
+  , writeSTRef
+
+  , type (∩)
+  , Common
+  , share
+  , liftL
+  , liftR
+  , use
+  , symm
+  , runST2
+  
+    
   ) where
 
 import Control.Applicative (Applicative(pure, (*>), (<*>), liftA2))
-import Control.Monad (Monad(return, (>>=), (>>)), (=<<), ap, liftM2)
-import Data.Bool (Bool(True,False))
-import Data.Coerce (coerce)
+import Control.Monad (Monad(return, (>>=), (>>)), ap, liftM2)
 import Data.Eq (Eq((==)))
 import Data.Function (($), (.))
 import Data.Functor (Functor(fmap))
+#if !(MIN_VERSION_base(4,11,0))
 import Data.Monoid (Monoid(mempty, mappend))
+#else
+import Data.Monoid (Monoid(mempty))
+#endif
 import Data.Semigroup (Semigroup((<>)))
-import GHC.Err (undefined)
-import GHC.Prim (State#, RealWorld, realWorld#, unsafeCoerce#, MutVar#, newMutVar#, readMutVar#, writeMutVar#, sameMutVar#)
-import GHC.Num ((+))
-import GHC.Show
-import GHC.Types (RuntimeRep, TYPE, Any, isTrue#, Int)
-import Theory.Named
+import GHC.Prim (State#, realWorld#, unsafeCoerce#, MutVar#, newMutVar#, readMutVar#, writeMutVar#, sameMutVar#)
+import GHC.Show (Show(showsPrec, showList), showString, showList__)
+import GHC.Types (RuntimeRep, TYPE, Any, isTrue#)
+import Theory.Named (type (~~))
 import Unsafe.Coerce (unsafeCoerce)
 
 newtype ST s a = ST (STRep (Any ~~ s) a)
@@ -82,11 +102,15 @@ instance Semigroup a => Semigroup (ST s a) where
 
 instance Monoid a => Monoid (ST s a) where
   mempty = pure mempty
+#if !(MIN_VERSION_base(4,11,0))
   mappend = liftA2 mappend
+#endif
 
 instance Show (ST s a) where
   showsPrec _ _ = showString "<<ST action>>"
   showList      = showList__ (showsPrec 0)
+
+type s ∩ s' = Common s s'
 
 data Common s s'
 
@@ -108,21 +132,21 @@ symm = unsafeCoerce
 runST2 :: (forall s s'. ST (Common s s') a) -> a
 runST2 (ST st_rep) = case runRegion# st_rep of (# _, a #) -> a
 
-stSharingDemo :: Bool
-stSharingDemo = runST2 $ do
-  (secret, ref) :: (STRef s Int, STRef (Common s s') Int) <- liftL $ do
-    unshared :: STRef s Int <- newSTRef 42
-    shared :: STRef (Common s s') Int <- share =<< newSTRef 17
-    return (unshared, shared)
+--stSharingDemo :: Bool
+--stSharingDemo = runST2 $ do
+--  (secret, ref) :: (STRef s Int, STRef (Common s s') Int) <- liftL $ do
+--    unshared :: STRef s Int <- newSTRef 42
+--    shared :: STRef (Common s s') Int <- share =<< newSTRef 17
+--    return (unshared, shared)
+--
+--  liftR $ do
+--    let mine = use (symm ref)
+--    x <- readSTRef mine
+--    writeSTRef mine (x + 1)
 
-  liftR $ do
-    let mine = use (symm ref)
-    x <- readSTRef mine
-    writeSTRef mine (x + 1)
-
-  liftL $ do
-    check <- readSTRef secret
-    return (check == 42)
+--  liftL $ do
+--    check <- readSTRef secret
+--    return (check == 42)
 
 {-# INLINE runST #-}
 runST :: (forall s. ST s a) -> a
@@ -138,8 +162,8 @@ rwToAny# x# = unsafeCoerce# x#
 rwFromAny# :: forall s s'. State# (Any ~~ s) -> State# s'
 rwFromAny# x# = unsafeCoerce# x#
 
-rwTupleFromAny# :: forall s a. (# State# (Any ~~ s), a #) -> (# State# s, a #)
-rwTupleFromAny# (# x, a #) = (# unsafeCoerce# x, a #)
+--rwTupleFromAny# :: forall s a. (# State# (Any ~~ s), a #) -> (# State# s, a #)
+--rwTupleFromAny# (# x, a #) = (# unsafeCoerce# x, a #)
 
 rwTupleToAny# :: forall s a. (# State# s, a #) -> (# State# (Any ~~ s), a #)
 rwTupleToAny# (# x, a #) = (# unsafeCoerce# x, a #)
