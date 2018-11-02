@@ -102,11 +102,12 @@ import           Data.Monoid (Monoid(mempty))
 import           Data.Semigroup (Semigroup((<>)))
 import           GHC.IO (IO(IO),unsafeDupableInterleaveIO)
 import           GHC.MVar (readMVar, putMVar, newEmptyMVar)
-import           GHC.Prim (State#, realWorld#, unsafeCoerce#, MutVar#, newMutVar#, readMutVar#, writeMutVar#, sameMutVar#, RealWorld, noDuplicate#)
+import           GHC.Prim (State#, unsafeCoerce#, MutVar#, newMutVar#, readMutVar#, writeMutVar#, sameMutVar#, RealWorld, noDuplicate#)
 import           GHC.Show (Show(showsPrec, showList), showString, showList__)
 import           GHC.Types (RuntimeRep, TYPE, Any, isTrue#)
 import           Theory.Named (type (~~))
 import           Unsafe.Coerce (unsafeCoerce)
+import qualified GHC.Magic as GHCMagic
 
 -- | Convert an ST2 to an ST
 toBaseST :: ST s a -> BaseST.ST s a
@@ -119,7 +120,7 @@ fromBaseST :: BaseST.ST s a -> ST s a
 fromBaseST = unsafeCoerce
 
 -- The state-transformer monad proper.  By default the monad is strict;
--- too many people got bitten by space leaks when it was lazy.
+-- too many people got bit by space leaks when it was lazy.
 
 -- | The strict state-transformer monad.
 -- A computation of type @'ST' s a@ transforms an internal state indexed
@@ -390,8 +391,63 @@ result is available.
 
 runRegion# :: forall (r :: RuntimeRep) (o :: TYPE r) s.
            (State# (Any ~~ s) -> o) -> o
-runRegion# m = m (rwToAny# realWorld#)
+runRegion# m = GHCMagic.runRW# (unsafeCoerce# m) -- m = m (rwToAny# realWorld#)
 {-# INLINE runRegion# #-}
+
+{- Note [runRegion#]
+   ~~~~~~~~~~~~~~~~~
+Originally, `runRegion#` was defined quite similarly to runRW#:
+  runRegion# :: forall (r :: RuntimeRep) (o :: TYPE r) s.
+    (State# (Any ~~ s) -> o) -> o
+  runRegion# m = m (rwToAny# realWorld#)
+
+But this definition is extremely brittle under optimisations! You should never
+define a function that performs as `runRW#` does without defining it in _terms_
+of `runRW#`. You can get semantically undesirable floating - runRW# is treated
+specially by Core and inlined only very late in compilation, after floating is
+complete. Below, I will inline "Note [runRW magic]" which is written in ghc's
+compiler/coreSyn/CorePrep.hs:
+
+Some definitions, for instance @runST@, must have careful control over float out                     
+of the bindings in their body. Consider this use of @runST@,                                         
+                                                                                                     
+    f x = runST ( \ s -> let (a, s')  = newArray# 100 [] s                                           
+                             (_, s'') = fill_in_array_or_something a x s'                            
+                         in freezeArray# a s'' )                                                     
+                                                                                                     
+If we inline @runST@, we'll get:                                                                     
+                                                                                                     
+    f x = let (a, s')  = newArray# 100 [] realWorld#{-NB-}                                           
+              (_, s'') = fill_in_array_or_something a x s'                                           
+          in freezeArray# a s''                                                                      
+                                                                                                     
+And now if we allow the @newArray#@ binding to float out to become a CAF,                            
+we end up with a result that is totally and utterly wrong:                                           
+                                                                                                     
+    f = let (a, s')  = newArray# 100 [] realWorld#{-NB-} -- YIKES!!!                                 
+        in \ x ->                                                                                    
+            let (_, s'') = fill_in_array_or_something a x s'                                         
+            in freezeArray# a s''                                                                    
+                                                                                                     
+All calls to @f@ will share a {\em single} array! Clearly this is nonsense and                       
+must be prevented.                                                                                   
+                                                                                                     
+This is what @runRW#@ gives us: by being inlined extremely late in the                               
+optimization (right before lowering to STG, in CorePrep), we can ensure that                         
+no further floating will occur. This allows us to safely inline things like                          
+@runST@, which are otherwise needlessly expensive (see #10678 and #5916).                            
+                                                                                                     
+'runRW' is defined (for historical reasons) in GHC.Magic, with a NOINLINE                            
+pragma.  It is levity-polymorphic.                                                                   
+                                                                                                     
+    runRW# :: forall (r1 :: RuntimeRep). (o :: TYPE r)                                               
+           => (State# RealWorld -> (# State# RealWorld, o #))                                        
+                              -> (# State# RealWorld, o #)                                           
+                                                                                                     
+It needs no special treatment in GHC except this special inlining here                               
+in CorePrep (and in ByteCodeGen). 
+
+-}
 
 rwToAny# :: forall s s'. State# s' -> State# (Any ~~ s)
 rwToAny# x# = unsafeCoerce# x#
@@ -415,4 +471,3 @@ repToAny# = unsafeCoerce#
 repFromAny# :: STRep (Any ~~ s) a -> (State# s -> (# State# s, a #))
 repFromAny# = unsafeCoerce#
 {-# INLINE repFromAny# #-}
-
