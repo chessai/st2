@@ -444,7 +444,7 @@ pragma.  It is levity-polymorphic.
            => (State# RealWorld -> (# State# RealWorld, o #))                                        
                               -> (# State# RealWorld, o #)                                           
                                                                                                      
-It needs no special treatment in GHC except this special inlining here                               
+It needs no special treatment in GHC except this special inlining
 in CorePrep (and in ByteCodeGen). 
 
 -}
