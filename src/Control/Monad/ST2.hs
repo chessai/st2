@@ -4,6 +4,7 @@
 {-# LANGUAGE KindSignatures       #-}
 {-# LANGUAGE MagicHash            #-}
 {-# LANGUAGE NoImplicitPrelude    #-}
+{-# LANGUAGE PolyKinds            #-}
 {-# LANGUAGE Rank2Types           #-}
 {-# LANGUAGE ScopedTypeVariables  #-}
 {-# LANGUAGE TypeFamilies         #-}
