@@ -14,7 +14,7 @@ description:
   memory regions. Within that computation, the user can run sub-computations bound to one or
   the other memory region. Furthermore, a sub-computation can move any variable that it owns
   into the common overlap via `share`.
-  . 
+  .
   An example is shown in the documentation, where one sub-computation creates two cells: one
   private, and the other shared. A second sub-computation has unconstrained access to the
   shared cell. Yet even though the private reference is also in scope during the second
@@ -42,11 +42,14 @@ library
   exposed-modules:
     Control.Monad.ST2
   build-depends:
-      base >= 4.9 && < 4.13
-    , gdp >= 0.0.0.1 && < 0.1.0.0
-    , ghc-prim
-    , primitive >= 0.6.4.0
+      base >= 4.9 && < 5
+    , gdp >= 0.0.0.1 && < 0.1
+    , primitive >= 0.6.4 && < 0.8
   hs-source-dirs:
     src
   default-language:
     Haskell2010
+
+source-repository head
+  type: git
+  location: git://github.com/chessai/st2.git

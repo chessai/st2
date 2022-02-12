@@ -48,7 +48,7 @@
 --   -- unshared reference still holds its original value.
 --   liftL $ do
 --     check <- readSTRef secret
---     return (check == 42) 
+--     return (check == 42)
 -- :}
 module Control.Monad.ST2
   ( -- * ST2 API
@@ -75,7 +75,7 @@ module Control.Monad.ST2
     -- * Unsafe API
   , toBaseST
   , fromBaseST
- 
+
   , STret
   , unsafeInterleaveST, unsafeDupableInterleaveST
   , stToPrim
@@ -95,6 +95,7 @@ import qualified Control.Monad.ST as BaseST
 import           Data.Eq (Eq((==)))
 import           Data.Function (($), (.))
 import           Data.Functor (Functor(fmap))
+import           Data.Kind (Type)
 #if !(MIN_VERSION_base(4,11,0))
 import           Data.Monoid (Monoid(mempty, mappend))
 #else
@@ -103,12 +104,11 @@ import           Data.Monoid (Monoid(mempty))
 import           Data.Semigroup (Semigroup((<>)))
 import           GHC.IO (IO(IO),unsafeDupableInterleaveIO)
 import           GHC.MVar (readMVar, putMVar, newEmptyMVar)
-import           GHC.Prim (State#, unsafeCoerce#, MutVar#, newMutVar#, readMutVar#, writeMutVar#, sameMutVar#, RealWorld, noDuplicate#)
+import           GHC.Exts (State#, unsafeCoerce#, MutVar#, newMutVar#, readMutVar#, writeMutVar#, sameMutVar#, RealWorld, noDuplicate#, RuntimeRep, TYPE, Any, isTrue#)
 import           GHC.Show (Show(showsPrec, showList), showString, showList__)
-import           GHC.Types (RuntimeRep, TYPE, Any, isTrue#)
 import           Theory.Named (type (~~))
 import           Unsafe.Coerce (unsafeCoerce)
-import qualified GHC.Magic as GHCMagic
+import qualified GHC.Exts as GHCExts
 
 -- | Convert an ST2 to an ST
 toBaseST :: ST s a -> BaseST.ST s a
@@ -140,7 +140,7 @@ fromBaseST = unsafeCoerce
 -- values stored in the state).  For example,
 --
 -- @'runST' (writeSTRef _|_ v >>= f) = _|_@
-newtype ST s a = ST (STRep (Any ~~ s) a)
+newtype ST (s :: Type) a = ST (STRep (Any ~~ s) a)
 
 -- | Convenience type alias for expressing ST computations
 --   more succintly.
@@ -392,7 +392,7 @@ result is available.
 
 runRegion# :: forall (r :: RuntimeRep) (o :: TYPE r) s.
            (State# (Any ~~ s) -> o) -> o
-runRegion# m = GHCMagic.runRW# (unsafeCoerce# m) -- m = m (rwToAny# realWorld#)
+runRegion# m = GHCExts.runRW# (unsafeCoerce# m) -- m = m (rwToAny# realWorld#)
 {-# INLINE runRegion# #-}
 
 {- Note [runRegion#]
@@ -409,44 +409,44 @@ specially by Core and inlined only very late in compilation, after floating is
 complete. Below, I will inline "Note [runRW magic]" which is written in ghc's
 compiler/coreSyn/CorePrep.hs:
 
-Some definitions, for instance @runST@, must have careful control over float out                     
-of the bindings in their body. Consider this use of @runST@,                                         
-                                                                                                     
-    f x = runST ( \ s -> let (a, s')  = newArray# 100 [] s                                           
-                             (_, s'') = fill_in_array_or_something a x s'                            
-                         in freezeArray# a s'' )                                                     
-                                                                                                     
-If we inline @runST@, we'll get:                                                                     
-                                                                                                     
-    f x = let (a, s')  = newArray# 100 [] realWorld#{-NB-}                                           
-              (_, s'') = fill_in_array_or_something a x s'                                           
-          in freezeArray# a s''                                                                      
-                                                                                                     
-And now if we allow the @newArray#@ binding to float out to become a CAF,                            
-we end up with a result that is totally and utterly wrong:                                           
-                                                                                                     
-    f = let (a, s')  = newArray# 100 [] realWorld#{-NB-} -- YIKES!!!                                 
-        in \ x ->                                                                                    
-            let (_, s'') = fill_in_array_or_something a x s'                                         
-            in freezeArray# a s''                                                                    
-                                                                                                     
-All calls to @f@ will share a {\em single} array! Clearly this is nonsense and                       
-must be prevented.                                                                                   
-                                                                                                     
-This is what @runRW#@ gives us: by being inlined extremely late in the                               
-optimization (right before lowering to STG, in CorePrep), we can ensure that                         
-no further floating will occur. This allows us to safely inline things like                          
-@runST@, which are otherwise needlessly expensive (see #10678 and #5916).                            
-                                                                                                     
-'runRW' is defined (for historical reasons) in GHC.Magic, with a NOINLINE                            
-pragma.  It is levity-polymorphic.                                                                   
-                                                                                                     
-    runRW# :: forall (r1 :: RuntimeRep). (o :: TYPE r)                                               
-           => (State# RealWorld -> (# State# RealWorld, o #))                                        
-                              -> (# State# RealWorld, o #)                                           
-                                                                                                     
+Some definitions, for instance @runST@, must have careful control over float out
+of the bindings in their body. Consider this use of @runST@,
+
+    f x = runST ( \ s -> let (a, s')  = newArray# 100 [] s
+                             (_, s'') = fill_in_array_or_something a x s'
+                         in freezeArray# a s'' )
+
+If we inline @runST@, we'll get:
+
+    f x = let (a, s')  = newArray# 100 [] realWorld#{-NB-}
+              (_, s'') = fill_in_array_or_something a x s'
+          in freezeArray# a s''
+
+And now if we allow the @newArray#@ binding to float out to become a CAF,
+we end up with a result that is totally and utterly wrong:
+
+    f = let (a, s')  = newArray# 100 [] realWorld#{-NB-} -- YIKES!!!
+        in \ x ->
+            let (_, s'') = fill_in_array_or_something a x s'
+            in freezeArray# a s''
+
+All calls to @f@ will share a {\em single} array! Clearly this is nonsense and
+must be prevented.
+
+This is what @runRW#@ gives us: by being inlined extremely late in the
+optimization (right before lowering to STG, in CorePrep), we can ensure that
+no further floating will occur. This allows us to safely inline things like
+@runST@, which are otherwise needlessly expensive (see #10678 and #5916).
+
+'runRW' is defined (for historical reasons) in GHC.Magic, with a NOINLINE
+pragma.  It is levity-polymorphic.
+
+    runRW# :: forall (r1 :: RuntimeRep). (o :: TYPE r)
+           => (State# RealWorld -> (# State# RealWorld, o #))
+                              -> (# State# RealWorld, o #)
+
 It needs no special treatment in GHC except this special inlining
-in CorePrep (and in ByteCodeGen). 
+in CorePrep (and in ByteCodeGen).
 
 -}
 
